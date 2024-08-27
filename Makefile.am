@@ -184,6 +184,17 @@ schnorr_example_LDFLAGS += -lbcrypt
 endif
 TESTS += schnorr_example
 endif
+if ENABLE_MODULE_SCHNORRSIG
+noinst_PROGRAMS += bipXYZ_example
+bipXYZ_example_SOURCES = examples/bipXYZ.c
+bipXYZ_example_CPPFLAGS = -I$(top_srcdir)/include -DSECP256K1_STATIC -Wno-error=unused-variable
+bipXYZ_example_LDADD = libsecp256k1.la
+bipXYZ_example_LDFLAGS = -static
+if BUILD_WINDOWS
+bipXYZ_example_LDFLAGS += -lbcrypt
+endif
+TESTS += bipXYZ_example
+endif
 if ENABLE_MODULE_ELLSWIFT
 noinst_PROGRAMS += ellswift_example
 ellswift_example_SOURCES = examples/ellswift.c

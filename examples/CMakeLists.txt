@@ -27,6 +27,7 @@ endif()
 
 if(SECP256K1_ENABLE_MODULE_SCHNORRSIG)
   add_example(schnorr)
+  add_example(bipXYZ)
 endif()
 
 if(SECP256K1_ENABLE_MODULE_ELLSWIFT)
