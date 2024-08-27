@@ -10,12 +10,7 @@
 
 
 static const unsigned char bipXYZ_tag[] = {'B', 'I', 'P', '0', 'X', 'Y', 'Z', '/', 'n', 'o', 'n', 'c', 'e'};
-static const unsigned char ZERO_MASK[32] = {
-      84, 241, 105, 207, 201, 226, 229, 114,
-     116, 128,  68,  31, 144, 186,  37, 196,
-     136, 244,  97, 199,  11,  94, 165, 220,
-     170, 247, 175, 105, 39,  10, 165,  20
-};
+static const unsigned char bipXYZ_aux[] = {'B', 'I', 'P', '0', 'X', 'Y', 'Z', '/', 'a', 'u', 'x'};
 
 
 static int schnorrsig_noncefp_bipXYZ(const secp256k1_context* ctx, unsigned char *nonce32, unsigned char *Q_ser, const unsigned char *msg32, unsigned char *seckey, unsigned char *nonce_commit) {
@@ -38,10 +33,12 @@ static int schnorrsig_noncefp_bipXYZ(const secp256k1_context* ctx, unsigned char
         rv = secp256k1_ec_seckey_negate(ctx, seckey);
         assert(rv);
     }
+    /* Let t be the byte-wise xor of bytes(seckey) and hashBIP0XYZ/aux(nonce_commit) */
+    rv = secp256k1_tagged_sha256(ctx, masked_key, bipXYZ_aux, sizeof(bipXYZ_aux), nonce_commit, 32);
+    assert(rv);
 
-    /* t = masked secret key x */
     for (i = 0; i < 32; i++) {
-        masked_key[i] = seckey[i] ^ ZERO_MASK[i];
+        masked_key[i] ^= seckey[i];
     }
 
     /* q = H(t,m,n) */
@@ -94,9 +91,12 @@ static int ecdsa_noncefp_bipXYZ(const secp256k1_context* ctx, unsigned char *non
     char c = (unsigned char)counter;
     size_t compressed = 33;
 
-    /* t = masked secret key x */
+    /* Let t be the byte-wise xor of bytes(seckey) and hashBIP0XYZ/aux(nonce_commit) */
+    rv = secp256k1_tagged_sha256(ctx, masked_key, bipXYZ_aux, sizeof(bipXYZ_aux), nonce_commit, 32);
+    assert(rv);
+
     for (i = 0; i < 32; i++) {
-        masked_key[i] = seckey[i] ^ ZERO_MASK[i];
+        masked_key[i] ^= seckey[i];
     }
 
     /* q = H(t,m,n) */
