@@ -181,12 +181,22 @@ static int ecdsa_noncefp_bipXYZ(const secp256k1_context* ctx, unsigned char *non
 
 static int schnorrsig_nonce_function_bipXYZ(unsigned char *nonce32, const unsigned char *msg, size_t msglen, const unsigned char *key32, const unsigned char *xonly_pk32, const unsigned char *algo, size_t algolen, void *data) {
     /* schnorrsig dummy passover */
+    (void)msg;
+    (void)msglen;
+    (void)key32;
+    (void)xonly_pk32;
+    (void)algo;
+    (void)algolen;
     memcpy(nonce32, (unsigned char*)data, 32);
     return 1;
 }
 
 static int ecdsa_nonce_function_bipXYZ(unsigned char *nonce32, const unsigned char *msg32, const unsigned char *key32, const unsigned char *algo16, void *data, unsigned int counter) {
     /* ecdsa dummy passover */
+    (void)msg32;
+    (void)key32;
+    (void)algo16;
+    (void)counter;
     memcpy(nonce32, (unsigned char*)data, 32);
     return 1;
 }
@@ -213,13 +223,13 @@ int schnorrsig_sign_bipXYZ(const secp256k1_context* ctx, unsigned char *sig64, u
     return 1;
 }
 
-int ecdsa_sign_bipXYZ(const secp256k1_context* ctx, const secp256k1_ecdsa_signature *signature, unsigned char *Q_ser, unsigned char *msg32, const secp256k1_keypair *keypair, unsigned char *nonce_commit) {
+int ecdsa_sign_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature *signature, unsigned char *Q_ser, unsigned char *msg32, const secp256k1_keypair *keypair, unsigned char *nonce_commit) {
     int rv;
     int c = 0;
-    size_t siglen = 74;
+    size_t siglen;
     unsigned char k[32];
     unsigned char seckey[32];
-    unsigned int ider[74];
+    unsigned char der_sig[74];
 
     const secp256k1_nonce_function nonce_fp_bipXYZ = ecdsa_nonce_function_bipXYZ;
 
@@ -237,11 +247,10 @@ int ecdsa_sign_bipXYZ(const secp256k1_context* ctx, const secp256k1_ecdsa_signat
 
     rv = secp256k1_ecdsa_sign(ctx, signature, msg32, seckey, nonce_fp_bipXYZ, (void*)k);
     assert(rv);
-    rv = secp256k1_ecdsa_signature_serialize_der(ctx, ider, &siglen, signature);
+    siglen = sizeof(der_sig);
+    rv = secp256k1_ecdsa_signature_serialize_der(ctx, der_sig, &siglen, signature);
     assert(rv);
 
-    unsigned char der_sig[siglen];
-    memcpy(der_sig, ider, siglen);
     printf("\tder ");
     print_hex(der_sig, siglen);
     printf("\tQ ");
