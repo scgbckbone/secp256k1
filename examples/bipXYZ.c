@@ -206,13 +206,11 @@ int ecdsa_sign_bipXYZ(const secp256k1_context* ctx, const secp256k1_ecdsa_signat
 
 int schnorrsig_verify_bipXYZ(const secp256k1_context* ctx, unsigned char *sig64, unsigned char *Q_ser, unsigned char *msg32, const secp256k1_xonly_pubkey *pubkey, unsigned char *nonce_commit) {
     secp256k1_xonly_pubkey Q;
-    secp256k1_xonly_pubkey R;
-    secp256k1_xonly_pubkey tweak_xo;
-    secp256k1_keypair kp;
-    int pk_parity, rv;
+    secp256k1_pubkey R;
+    secp256k1_xonly_pubkey R_xonly;
+    int rv;
     unsigned char tweak_ser[96];
     unsigned char tweak[32];
-    const secp256k1_xonly_pubkey *pubkeys[2];
     unsigned char R_ser[32];
 
     rv = secp256k1_xonly_pubkey_parse(ctx, &Q, Q_ser);
@@ -225,23 +223,12 @@ int schnorrsig_verify_bipXYZ(const secp256k1_context* ctx, unsigned char *sig64,
     rv = secp256k1_tagged_sha256(ctx, tweak, bipXYZ_tag, sizeof(bipXYZ_tag), tweak_ser, sizeof(tweak_ser));
     assert(rv);
 
-    /* H(Q,m,n)·G */
-    rv = secp256k1_keypair_create(ctx, &kp, tweak);
-    assert(rv);
-    rv = secp256k1_keypair_xonly_pub(ctx, &tweak_xo, &pk_parity, &kp);
-    assert(rv);
-
-    assert(rv);
-    if (pk_parity == 1) {
-        rv = secp256k1_ec_pubkey_negate(ctx, &tweak_xo);
-        assert(rv);
-    }
-    pubkeys[0] = &tweak_xo;
-    pubkeys[1] = &Q;
     /* R = Q + H(Q,m,n)·G */
-    rv = secp256k1_ec_pubkey_combine(ctx, &R, pubkeys, 2);
+    rv = secp256k1_xonly_pubkey_tweak_add(ctx, &R, &Q, tweak);
     assert(rv);
-    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R);
+    rv = secp256k1_xonly_pubkey_from_pubkey(ctx, &R_xonly, NULL, &R);
+    assert(rv);
+    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R_xonly);
     assert(rv);
     printf("\tR ");
     print_hex(R_ser, 32);
@@ -260,12 +247,10 @@ int schnorrsig_verify_bipXYZ(const secp256k1_context* ctx, unsigned char *sig64,
 int ecdsa_verify_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature *signature, unsigned char *Q_ser, unsigned char *msg32, const secp256k1_pubkey *pubkey, unsigned char *nonce_commit) {
     secp256k1_pubkey Q;
     secp256k1_pubkey R;
-    secp256k1_xonly_pubkey tweak_point;
-    secp256k1_keypair kp;
+    secp256k1_xonly_pubkey R_xonly;
     int rv;
     unsigned char tweak_ser[97];
     unsigned char tweak[32];
-    const secp256k1_xonly_pubkey *pubkeys[2];
     unsigned char R_ser[32];
     unsigned char sig[64];
 
@@ -279,19 +264,14 @@ int ecdsa_verify_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature 
     rv = secp256k1_tagged_sha256(ctx, tweak, bipXYZ_tag, sizeof(bipXYZ_tag), tweak_ser, sizeof(tweak_ser));
     assert(rv);
 
-    /* H(Q,m,n)·G */
-    rv = secp256k1_keypair_create(ctx, &kp, tweak);
-    assert(rv);
-    rv = secp256k1_keypair_pub(ctx, &tweak_point, &kp);
-    assert(rv);
-
-    pubkeys[0] = &tweak_point;
-    pubkeys[1] = &Q;
     /* R = Q + H(Q,m,n)·G */
-    rv = secp256k1_ec_pubkey_combine(ctx, &R, pubkeys, 2);
+    R = Q;
+    rv = secp256k1_ec_pubkey_tweak_add(ctx, &R, tweak);
     assert(rv);
     /* serialize as Xonly to get rid of the marker */
-    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R);
+    rv = secp256k1_xonly_pubkey_from_pubkey(ctx, &R_xonly, NULL, &R);
+    assert(rv);
+    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R_xonly);
     assert(rv);
     printf("\tR ");
     print_hex(R_ser, 32);
