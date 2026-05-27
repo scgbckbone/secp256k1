@@ -11,6 +11,51 @@
 
 static const unsigned char bipXYZ_tag[] = {'B', 'I', 'P', '0', 'X', 'Y', 'Z', '/', 'n', 'o', 'n', 'c', 'e'};
 static const unsigned char bipXYZ_aux[] = {'B', 'I', 'P', '0', 'X', 'Y', 'Z', '/', 'a', 'u', 'x'};
+static const unsigned char secp256k1_order[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+    0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41
+};
+
+static int bytes32_ge(const unsigned char *a, const unsigned char *b) {
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        if (a[i] > b[i]) {
+            return 1;
+        }
+        if (a[i] < b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void bytes32_sub(unsigned char *r, const unsigned char *a, const unsigned char *b) {
+    int i;
+    unsigned int borrow = 0;
+
+    for (i = 31; i >= 0; i--) {
+        unsigned int ai = a[i];
+        unsigned int bi = b[i] + borrow;
+        if (ai < bi) {
+            r[i] = (unsigned char)(ai + 0x100 - bi);
+            borrow = 1;
+        } else {
+            r[i] = (unsigned char)(ai - bi);
+            borrow = 0;
+        }
+    }
+}
+
+static void ecdsa_r_from_x(unsigned char *r, const unsigned char *x) {
+    if (bytes32_ge(x, secp256k1_order)) {
+        bytes32_sub(r, x, secp256k1_order);
+    } else {
+        memcpy(r, x, 32);
+    }
+}
 
 
 static int schnorrsig_noncefp_bipXYZ(const secp256k1_context* ctx, unsigned char *nonce32, unsigned char *Q_ser, const unsigned char *msg32, unsigned char *seckey, unsigned char *nonce_commit) {
@@ -252,6 +297,7 @@ int ecdsa_verify_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature 
     unsigned char tweak_ser[97];
     unsigned char tweak[32];
     unsigned char R_ser[32];
+    unsigned char R_r[32];
     unsigned char sig[64];
 
     rv = secp256k1_ec_pubkey_parse(ctx, &Q, Q_ser, 33);
@@ -273,13 +319,14 @@ int ecdsa_verify_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature 
     assert(rv);
     rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R_xonly);
     assert(rv);
+    ecdsa_r_from_x(R_r, R_ser);
     printf("\tR ");
-    print_hex(R_ser, 32);
+    print_hex(R_r, 32);
     rv = secp256k1_ecdsa_signature_serialize_compact(ctx, sig, signature);
     assert(rv);
     printf("\tsig compact ");
     print_hex(sig, 64);
-    if (memcmp(R_ser, sig, sizeof(R_ser)) == 0) {
+    if (memcmp(R_r, sig, sizeof(R_r)) == 0) {
         printf("\tantiexfill: OK\n");
         rv = secp256k1_ecdsa_verify(ctx, signature, msg32, pubkey);
         assert(rv);
