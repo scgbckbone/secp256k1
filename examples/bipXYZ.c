@@ -245,7 +245,7 @@ int ecdsa_sign_bipXYZ(const secp256k1_context* ctx, const secp256k1_ecdsa_signat
     printf("\tder ");
     print_hex(der_sig, siglen);
     printf("\tQ ");
-    print_hex(Q_ser, 32);
+    print_hex(Q_ser, 33);
     return 1;
 }
 
