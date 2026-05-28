@@ -347,6 +347,15 @@ int ecdsa_verify_bipXYZ(const secp256k1_context* ctx, secp256k1_ecdsa_signature 
     }
 }
 
+/* Host (companion app / watch-only wallet) supplies the nonce extra `n`
+ * to the device on each signing request — per the proposal, `n` is
+ * carried in a PSBT extension. The signing device MUST NOT generate `n`
+ * itself: the anti-exfil property requires `n` to be chosen by an
+ * honest verifier, not by the signer. */
+static int host_supply_nonce_extra(unsigned char *n) {
+    return fill_random(n, 32);
+}
+
 int main(void) {
     unsigned char msg[32];
     unsigned char seckey[32];
@@ -369,52 +378,55 @@ int main(void) {
     rv = secp256k1_context_randomize(ctx, randomize);
     assert(rv);
 
+    printf("=== HOST (companion app / verifier) ===\n");
     if (!fill_random(msg, sizeof(msg))) {
         printf("Failed to generate msg\n");
         return 1;
     }
-    printf("msg ");
+    printf("\tmsg ");
     print_hex(msg, 32);
 
-    if (!fill_random(nonce_commit, sizeof(nonce_commit))) {
-        printf("Failed to generate nonce_commit\n");
+    /* Host picks the nonce extra `n` and sends it to the device along
+     * with `msg`. See host_supply_nonce_extra above for the trust note. */
+    if (!host_supply_nonce_extra(nonce_commit)) {
+        printf("Failed to generate nonce extra n\n");
         return 1;
     }
-    printf("nonce_commit ");
+    printf("\tn   ");
     print_hex(nonce_commit, 32);
+
+    printf("\n=== DEVICE (HWW) setup ===\n");
     while (1) {
         if (!fill_random(seckey, sizeof(seckey))) {
             printf("Failed to generate randomness\n");
             return 1;
         }
         if (secp256k1_keypair_create(ctx, &keypair, seckey)) {
-            printf("seckey ");
+            printf("\tseckey ");
             print_hex(seckey, 32);
             break;
         }
     }
-    printf("\n");
-    printf("=== SCHNORRSIG ===\n");
-    printf("HWW:\n");
+
+    printf("\n=== SCHNORRSIG ===\n");
+    /* HWW receives (msg, n) from host; returns (sig, Q). */
+    printf("HWW: (input: msg, n)\n");
     rv = schnorrsig_sign_bipXYZ(ctx, sig, Q_ser, msg, &keypair, nonce_commit);
     assert(rv);
-    printf("SW:\n");
+    /* SW already holds (msg, n); receives (sig, Q); recomputes R. */
+    printf("SW:  (input: sig, Q; recomputes R from msg, n, Q)\n");
     rv = secp256k1_keypair_xonly_pub(ctx, &pubkey, NULL, &keypair);
     assert(rv);
-
     rv = schnorrsig_verify_bipXYZ(ctx, sig, Q_ser, msg, &pubkey, nonce_commit);
     assert(rv);
 
-    printf("\n");
-
-    printf("=== ECDSA ===\n");
-    printf("HWW:\n");
+    printf("\n=== ECDSA ===\n");
+    printf("HWW: (input: msg, n)\n");
     rv = ecdsa_sign_bipXYZ(ctx, &esig, Q_ser_ecdsa, msg, &keypair, nonce_commit);
     assert(rv);
-    printf("SW:\n");
+    printf("SW:  (input: sig, Q; recomputes R from msg, n, Q)\n");
     rv = secp256k1_keypair_pub(ctx, &pubkey_ecdsa, &keypair);
     assert(rv);
-
     rv = ecdsa_verify_bipXYZ(ctx, &esig, Q_ser_ecdsa, msg, &pubkey_ecdsa, nonce_commit);
     assert(rv);
 
