@@ -195,6 +195,17 @@ bipXYZ_example_LDFLAGS += -lbcrypt
 endif
 TESTS += bipXYZ_example
 endif
+if ENABLE_MODULE_SCHNORRSIG
+noinst_PROGRAMS += bipXYZ_2round_example
+bipXYZ_2round_example_SOURCES = examples/bipXYZ_2round.c
+bipXYZ_2round_example_CPPFLAGS = -I$(top_srcdir)/include -DSECP256K1_STATIC
+bipXYZ_2round_example_LDADD = libsecp256k1.la
+bipXYZ_2round_example_LDFLAGS = -static
+if BUILD_WINDOWS
+bipXYZ_2round_example_LDFLAGS += -lbcrypt
+endif
+TESTS += bipXYZ_2round_example
+endif
 if ENABLE_MODULE_ELLSWIFT
 noinst_PROGRAMS += ellswift_example
 ellswift_example_SOURCES = examples/ellswift.c
