@@ -55,6 +55,7 @@
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_schnorrsig.h>
 
+#include "bipXYZ_impl.h"
 
 static const unsigned char tag_commit[] = {
     'B','I','P','0','X','Y','Z','-','2','R','/','c','o','m','m','i','t'
@@ -62,46 +63,6 @@ static const unsigned char tag_commit[] = {
 static const unsigned char tag_tweak[] = {
     'B','I','P','0','X','Y','Z','-','2','R','/','t','w','e','a','k'
 };
-
-static const unsigned char secp256k1_order[] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
-    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
-    0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41
-};
-
-static int bytes32_ge(const unsigned char *a, const unsigned char *b) {
-    int i;
-    for (i = 0; i < 32; i++) {
-        if (a[i] > b[i]) return 1;
-        if (a[i] < b[i]) return 0;
-    }
-    return 1;
-}
-
-static void bytes32_sub(unsigned char *r, const unsigned char *a, const unsigned char *b) {
-    int i;
-    unsigned int borrow = 0;
-    for (i = 31; i >= 0; i--) {
-        unsigned int ai = a[i];
-        unsigned int bi = b[i] + borrow;
-        if (ai < bi) {
-            r[i] = (unsigned char)(ai + 0x100 - bi);
-            borrow = 1;
-        } else {
-            r[i] = (unsigned char)(ai - bi);
-            borrow = 0;
-        }
-    }
-}
-
-static void ecdsa_r_from_x(unsigned char *r, const unsigned char *x) {
-    if (bytes32_ge(x, secp256k1_order)) {
-        bytes32_sub(r, x, secp256k1_order);
-    } else {
-        memcpy(r, x, 32);
-    }
-}
 
 /* =====================================================================
  * Round 1 (device): commit to Q = q·G with q derived from (seckey, m).
@@ -202,53 +163,6 @@ static int host_pick_challenge(unsigned char *rho) {
  * Round 2 (device): sign with k = q + H_tag(Q, m, ρ).
  * ===================================================================== */
 
-/* Custom nonce callbacks just hand back the pre-computed k. */
-static int nonce_passthrough_schnorr(unsigned char *nonce32,
-                                     const unsigned char *msg, size_t msglen,
-                                     const unsigned char *key32,
-                                     const unsigned char *xonly_pk32,
-                                     const unsigned char *algo, size_t algolen,
-                                     void *data) {
-    (void)msg; (void)msglen; (void)key32; (void)xonly_pk32; (void)algo; (void)algolen;
-    memcpy(nonce32, (unsigned char *)data, 32);
-    return 1;
-}
-
-static int nonce_passthrough_ecdsa(unsigned char *nonce32,
-                                   const unsigned char *msg32,
-                                   const unsigned char *key32,
-                                   const unsigned char *algo16,
-                                   void *data,
-                                   unsigned int counter) {
-    (void)msg32; (void)key32; (void)algo16; (void)counter;
-    memcpy(nonce32, (unsigned char *)data, 32);
-    return 1;
-}
-
-static int compute_tweak_schnorr(const secp256k1_context *ctx,
-                                 unsigned char *tweak,
-                                 const unsigned char *Q_ser32,
-                                 const unsigned char *m32,
-                                 const unsigned char *rho) {
-    unsigned char buf[96];
-    memcpy(buf,      Q_ser32, 32);
-    memcpy(buf + 32, m32,     32);
-    memcpy(buf + 64, rho,     32);
-    return secp256k1_tagged_sha256(ctx, tweak, tag_tweak, sizeof(tag_tweak), buf, sizeof(buf));
-}
-
-static int compute_tweak_ecdsa(const secp256k1_context *ctx,
-                               unsigned char *tweak,
-                               const unsigned char *Q_ser33,
-                               const unsigned char *m32,
-                               const unsigned char *rho) {
-    unsigned char buf[97];
-    memcpy(buf,      Q_ser33, 33);
-    memcpy(buf + 33, m32,     32);
-    memcpy(buf + 65, rho,     32);
-    return secp256k1_tagged_sha256(ctx, tweak, tag_tweak, sizeof(tag_tweak), buf, sizeof(buf));
-}
-
 static int schnorrsig_device_round2(const secp256k1_context *ctx,
                                     unsigned char *sig64,
                                     const unsigned char *q,
@@ -261,13 +175,13 @@ static int schnorrsig_device_round2(const secp256k1_context *ctx,
     secp256k1_schnorrsig_extraparams xp = SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT;
     int rv;
 
-    rv = compute_tweak_schnorr(ctx, tweak, Q_ser, m32, rho);
+    rv = bipxyz_compute_tweak_schnorr(ctx, tweak, tag_tweak, sizeof(tag_tweak), Q_ser, m32, rho);
     assert(rv);
     memcpy(k, q, 32);
     rv = secp256k1_ec_seckey_tweak_add(ctx, k, tweak);
     assert(rv);
 
-    xp.noncefp = nonce_passthrough_schnorr;
+    xp.noncefp = bipxyz_nonce_passthrough_schnorr;
     xp.ndata = k;
     rv = secp256k1_schnorrsig_sign_custom(ctx, sig64, m32, 32, keypair, &xp);
     assert(rv);
@@ -288,7 +202,7 @@ static int ecdsa_device_round2(const secp256k1_context *ctx,
     unsigned char seckey[32];
     int rv;
 
-    rv = compute_tweak_ecdsa(ctx, tweak, Q_ser33, m32, rho);
+    rv = bipxyz_compute_tweak_ecdsa(ctx, tweak, tag_tweak, sizeof(tag_tweak), Q_ser33, m32, rho);
     assert(rv);
     memcpy(k, q, 32);
     rv = secp256k1_ec_seckey_tweak_add(ctx, k, tweak);
@@ -296,7 +210,7 @@ static int ecdsa_device_round2(const secp256k1_context *ctx,
 
     rv = secp256k1_keypair_sec(ctx, seckey, keypair);
     assert(rv);
-    rv = secp256k1_ecdsa_sign(ctx, sig_out, m32, seckey, nonce_passthrough_ecdsa, (void *)k);
+    rv = secp256k1_ecdsa_sign(ctx, sig_out, m32, seckey, bipxyz_nonce_passthrough_ecdsa, (void *)k);
     assert(rv);
 
     secure_erase(seckey, sizeof(seckey));
@@ -314,21 +228,14 @@ static int schnorrsig_host_verify(const secp256k1_context *ctx,
                                   const unsigned char *m32,
                                   const unsigned char *rho,
                                   const secp256k1_xonly_pubkey *pubkey) {
-    secp256k1_xonly_pubkey Q, R_xo;
-    secp256k1_pubkey R;
-    unsigned char tweak[32], R_ser[32];
+    unsigned char R_ser[32];
     int rv;
 
-    rv = secp256k1_xonly_pubkey_parse(ctx, &Q, Q_ser);
-    assert(rv);
-    rv = compute_tweak_schnorr(ctx, tweak, Q_ser, m32, rho);
-    assert(rv);
-    rv = secp256k1_xonly_pubkey_tweak_add(ctx, &R, &Q, tweak);
-    assert(rv);
-    rv = secp256k1_xonly_pubkey_from_pubkey(ctx, &R_xo, NULL, &R);
-    assert(rv);
-    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R_xo);
-    assert(rv);
+    rv = bipxyz_reconstruct_schnorr_R(ctx, R_ser, Q_ser, tag_tweak, sizeof(tag_tweak), m32, rho);
+    if (!rv) {
+        printf("\tantiexfill: FAIL\n");
+        return 0;
+    }
 
     printf("\tR   ");
     print_hex(R_ser, 32);
@@ -352,23 +259,14 @@ static int ecdsa_host_verify(const secp256k1_context *ctx,
                              const unsigned char *m32,
                              const unsigned char *rho,
                              const secp256k1_pubkey *pubkey) {
-    secp256k1_pubkey Q, R;
-    secp256k1_xonly_pubkey R_xo;
-    unsigned char tweak[32], R_ser[32], R_r[32], sig_compact[64];
+    unsigned char R_r[32], sig_compact[64];
     int rv;
 
-    rv = secp256k1_ec_pubkey_parse(ctx, &Q, Q_ser33, 33);
-    assert(rv);
-    rv = compute_tweak_ecdsa(ctx, tweak, Q_ser33, m32, rho);
-    assert(rv);
-    R = Q;
-    rv = secp256k1_ec_pubkey_tweak_add(ctx, &R, tweak);
-    assert(rv);
-    rv = secp256k1_xonly_pubkey_from_pubkey(ctx, &R_xo, NULL, &R);
-    assert(rv);
-    rv = secp256k1_xonly_pubkey_serialize(ctx, R_ser, &R_xo);
-    assert(rv);
-    ecdsa_r_from_x(R_r, R_ser);
+    rv = bipxyz_reconstruct_ecdsa_r(ctx, R_r, Q_ser33, tag_tweak, sizeof(tag_tweak), m32, rho);
+    if (!rv) {
+        printf("\tantiexfill: FAIL\n");
+        return 0;
+    }
     rv = secp256k1_ecdsa_signature_serialize_compact(ctx, sig_compact, signature);
     assert(rv);
 
