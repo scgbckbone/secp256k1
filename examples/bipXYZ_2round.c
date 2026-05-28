@@ -1,27 +1,28 @@
 /***********************************************************************
- * Two-round (sign-to-contract) anti-exfil example.
+ * Commit-reveal sign-to-contract anti-exfil example.
  *
  * Unlike the 1-round bipXYZ scheme in examples/bipXYZ.c — which is
- * mitigation-based, not cryptographic — this 2-round construction
- * provides cryptographic anti-exfil: a malicious signing device cannot
- * leak its secret key via nonce choice to an outside observer of
- * signatures.
+ * mitigation-based, not cryptographic — this construction provides
+ * cryptographic anti-exfil: a malicious signing device cannot leak its
+ * secret key via nonce choice to an outside observer of signatures.
  *
  * Protocol
  * --------
- *   Round 1:  Device → Host:    Q   = q·G        (device commits)
- *   Round 2:  Host   → Device:  ρ                (host challenges)
+ *   Round 0:  Host   → Device:  C = H(ρ)         (host commits)
+ *   Round 1:  Device → Host:    Q = q·G          (device commits)
+ *   Round 2:  Host   → Device:  ρ                (host opens C)
  *             Device → Host:    sig              (device signs)
  *
  *   Host verifier check:  sig.R == Q + H(Q, m, ρ)·G
  *
  * Security argument
  * -----------------
- *   The device commits to Q before seeing ρ. Whatever q it picks
- *   (honest or adversarial), it has no information about ρ at that
- *   moment, so it cannot evaluate the resulting R and therefore
- *   cannot grind toward an R that leaks key bits. After ρ arrives,
- *   R = Q + H(Q,m,ρ)·G is fully determined.
+ *   The host commits to ρ before seeing Q, so it cannot request multiple
+ *   signatures for the same Q with different ρ values. The device commits
+ *   to Q before seeing ρ. Whatever q it picks (honest or adversarial), it
+ *   has no information about ρ at that moment, so it cannot evaluate the
+ *   resulting R and therefore cannot grind toward an R that leaks key bits.
+ *   After ρ arrives, R = Q + H(Q,m,ρ)·G is fully determined.
  *
  *   Q itself is sent privately to the (trusted) host; only sig is
  *   published. A malicious host that colludes with the on-chain
@@ -63,9 +64,33 @@ static const unsigned char tag_commit[] = {
 static const unsigned char tag_tweak[] = {
     'B','I','P','0','X','Y','Z','-','2','R','/','t','w','e','a','k'
 };
+static const unsigned char tag_host_commit[] = {
+    'B','I','P','0','X','Y','Z','-','2','R','/','h','o','s','t'
+};
+
+static int host_pick_challenge(unsigned char *rho) {
+    return fill_random(rho, 32);
+}
+
+static int host_commit_challenge(const secp256k1_context *ctx,
+                                 unsigned char *rho_commit,
+                                 const unsigned char *rho) {
+    return secp256k1_tagged_sha256(ctx, rho_commit, tag_host_commit, sizeof(tag_host_commit), rho, 32);
+}
+
+static int verify_challenge_commitment(const secp256k1_context *ctx,
+                                       const unsigned char *rho,
+                                       const unsigned char *rho_commit) {
+    unsigned char expected[32];
+    int rv;
+
+    rv = host_commit_challenge(ctx, expected, rho);
+    assert(rv);
+    return memcmp(expected, rho_commit, sizeof(expected)) == 0;
+}
 
 /* =====================================================================
- * Round 1 (device): commit to Q = q·G with q derived from (seckey, m).
+ * Round 1 (device): commit to Q = q·G with q derived from (seckey, m, C).
  *
  * The device must remember q between rounds; only Q is sent to the host.
  * Q is the device's binding "nonce commitment" — committing to it before
@@ -76,9 +101,10 @@ static int schnorrsig_device_round1(const secp256k1_context *ctx,
                                     unsigned char *q,
                                     unsigned char *Q_ser,
                                     const secp256k1_keypair *keypair,
-                                    const unsigned char *m32) {
+                                    const unsigned char *m32,
+                                    const unsigned char *rho_commit) {
     unsigned char seckey[32];
-    unsigned char input[64];
+    unsigned char input[96];
     secp256k1_xonly_pubkey X, Q_xo;
     secp256k1_pubkey Q_full;
     int pk_parity, rv;
@@ -94,8 +120,9 @@ static int schnorrsig_device_round1(const secp256k1_context *ctx,
         assert(rv);
     }
 
-    memcpy(input,      seckey, 32);
-    memcpy(input + 32, m32,    32);
+    memcpy(input, seckey, 32);
+    memcpy(input + 32, m32, 32);
+    memcpy(input + 64, rho_commit, 32);
     rv = secp256k1_tagged_sha256(ctx, q, tag_commit, sizeof(tag_commit), input, sizeof(input));
     assert(rv);
     secure_erase(seckey, sizeof(seckey));
@@ -119,9 +146,10 @@ static int ecdsa_device_round1(const secp256k1_context *ctx,
                                unsigned char *q,
                                unsigned char *Q_ser33,
                                const secp256k1_keypair *keypair,
-                               const unsigned char *m32) {
+                               const unsigned char *m32,
+                               const unsigned char *rho_commit) {
     unsigned char seckey[32];
-    unsigned char input[64];
+    unsigned char input[96];
     secp256k1_pubkey Q;
     size_t compressed_len = 33;
     int rv;
@@ -129,8 +157,9 @@ static int ecdsa_device_round1(const secp256k1_context *ctx,
     rv = secp256k1_keypair_sec(ctx, seckey, keypair);
     assert(rv);
 
-    memcpy(input,      seckey, 32);
-    memcpy(input + 32, m32,    32);
+    memcpy(input, seckey, 32);
+    memcpy(input + 32, m32, 32);
+    memcpy(input + 64, rho_commit, 32);
     rv = secp256k1_tagged_sha256(ctx, q, tag_commit, sizeof(tag_commit), input, sizeof(input));
     assert(rv);
     secure_erase(seckey, sizeof(seckey));
@@ -148,18 +177,6 @@ static int ecdsa_device_round1(const secp256k1_context *ctx,
 }
 
 /* =====================================================================
- * Round 2 (host): pick a fresh random challenge ρ.
- *
- * SECURITY CRITICAL: ρ must be sampled *after* the device's Q has
- * arrived, unpredictable to the device, and never reused. Letting the
- * device influence ρ defeats the construction.
- * ===================================================================== */
-
-static int host_pick_challenge(unsigned char *rho) {
-    return fill_random(rho, 32);
-}
-
-/* =====================================================================
  * Round 2 (device): sign with k = q + H_tag(Q, m, ρ).
  * ===================================================================== */
 
@@ -169,11 +186,16 @@ static int schnorrsig_device_round2(const secp256k1_context *ctx,
                                     const unsigned char *Q_ser,
                                     const unsigned char *m32,
                                     const unsigned char *rho,
+                                    const unsigned char *rho_commit,
                                     const secp256k1_keypair *keypair) {
     unsigned char tweak[32];
     unsigned char k[32];
     secp256k1_schnorrsig_extraparams xp = SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT;
     int rv;
+
+    if (!verify_challenge_commitment(ctx, rho, rho_commit)) {
+        return 0;
+    }
 
     rv = bipxyz_compute_tweak_schnorr(ctx, tweak, tag_tweak, sizeof(tag_tweak), Q_ser, m32, rho);
     assert(rv);
@@ -196,11 +218,16 @@ static int ecdsa_device_round2(const secp256k1_context *ctx,
                                const unsigned char *Q_ser33,
                                const unsigned char *m32,
                                const unsigned char *rho,
+                               const unsigned char *rho_commit,
                                const secp256k1_keypair *keypair) {
     unsigned char tweak[32];
     unsigned char k[32];
     unsigned char seckey[32];
     int rv;
+
+    if (!verify_challenge_commitment(ctx, rho, rho_commit)) {
+        return 0;
+    }
 
     rv = bipxyz_compute_tweak_ecdsa(ctx, tweak, tag_tweak, sizeof(tag_tweak), Q_ser33, m32, rho);
     assert(rv);
@@ -296,6 +323,7 @@ int main(void) {
     unsigned char msg[32];
     unsigned char seckey[32];
     unsigned char rho[32];
+    unsigned char rho_commit[32];
     unsigned char q_schnorr[32];
     unsigned char q_ecdsa[32];
     unsigned char Q_ser_schnorr[32];
@@ -332,23 +360,29 @@ int main(void) {
         }
     }
 
-    /* ===================== SCHNORRSIG (2-round) ===================== */
-    printf("\n=== SCHNORRSIG (2-round) ===\n");
+    /* ===================== SCHNORRSIG (commit-reveal) ===================== */
+    printf("\n=== SCHNORRSIG (commit-reveal) ===\n");
+
+    printf("Round 0: SW  -> HWW  (commit H(rho))\n");
+    rv = host_pick_challenge(rho);
+    assert(rv);
+    rv = host_commit_challenge(ctx, rho_commit, rho);
+    assert(rv);
+    printf("\tH(rho) ");
+    print_hex(rho_commit, 32);
 
     printf("Round 1: HWW -> SW   (commit Q)\n");
-    rv = schnorrsig_device_round1(ctx, q_schnorr, Q_ser_schnorr, &keypair, msg);
+    rv = schnorrsig_device_round1(ctx, q_schnorr, Q_ser_schnorr, &keypair, msg, rho_commit);
     assert(rv);
     printf("\tQ   ");
     print_hex(Q_ser_schnorr, 32);
 
-    printf("Round 2: SW  -> HWW  (challenge rho)\n");
-    rv = host_pick_challenge(rho);
-    assert(rv);
+    printf("Round 2: SW  -> HWW  (open rho)\n");
     printf("\trho ");
     print_hex(rho, 32);
 
     printf("         HWW -> SW   (sign)\n");
-    rv = schnorrsig_device_round2(ctx, sig, q_schnorr, Q_ser_schnorr, msg, rho, &keypair);
+    rv = schnorrsig_device_round2(ctx, sig, q_schnorr, Q_ser_schnorr, msg, rho, rho_commit, &keypair);
     assert(rv);
     printf("\tsig ");
     print_hex(sig, 64);
@@ -360,23 +394,29 @@ int main(void) {
     assert(rv);
     secure_erase(q_schnorr, sizeof(q_schnorr));
 
-    /* ===================== ECDSA (2-round) ===================== */
-    printf("\n=== ECDSA (2-round) ===\n");
+    /* ===================== ECDSA (commit-reveal) ===================== */
+    printf("\n=== ECDSA (commit-reveal) ===\n");
+
+    printf("Round 0: SW  -> HWW  (commit H(rho))\n");
+    rv = host_pick_challenge(rho);
+    assert(rv);
+    rv = host_commit_challenge(ctx, rho_commit, rho);
+    assert(rv);
+    printf("\tH(rho) ");
+    print_hex(rho_commit, 32);
 
     printf("Round 1: HWW -> SW   (commit Q)\n");
-    rv = ecdsa_device_round1(ctx, q_ecdsa, Q_ser_ecdsa, &keypair, msg);
+    rv = ecdsa_device_round1(ctx, q_ecdsa, Q_ser_ecdsa, &keypair, msg, rho_commit);
     assert(rv);
     printf("\tQ   ");
     print_hex(Q_ser_ecdsa, 33);
 
-    printf("Round 2: SW  -> HWW  (challenge rho)\n");
-    rv = host_pick_challenge(rho);
-    assert(rv);
+    printf("Round 2: SW  -> HWW  (open rho)\n");
     printf("\trho ");
     print_hex(rho, 32);
 
     printf("         HWW -> SW   (sign)\n");
-    rv = ecdsa_device_round2(ctx, &esig, q_ecdsa, Q_ser_ecdsa, msg, rho, &keypair);
+    rv = ecdsa_device_round2(ctx, &esig, q_ecdsa, Q_ser_ecdsa, msg, rho, rho_commit, &keypair);
     assert(rv);
 
     printf("Host verify:\n");
